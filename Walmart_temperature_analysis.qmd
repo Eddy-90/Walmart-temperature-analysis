@@ -1,0 +1,149 @@
+---
+title: "Do Higher Temperatures Causally Affect Walmart Sales?"
+author: "Ednah"
+format: docx
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+library(fixest)
+
+# Load raw data (no absolute paths)
+data <- read.csv("Walmart_Sales.csv")
+
+# Data preparation
+data <- data %>%
+  mutate(
+    Date = dmy(Date),
+    Store = factor(Store),
+    Holiday_Flag = factor(Holiday_Flag),
+    year = year(Date),
+    month = month(Date)
+  )
+
+# Sanity check
+stopifnot(!any(is.na(data)))
+
+```
+## **1. Research Question**
+
+Wal-Mart is concerned that rising temperatures could affect weekly sales. The research question for this analysis is:
+
+**In these stores, do higher temperatures causally affect weekly sales?**
+
+A key challenge is that temperature varies systematically over time and across seasons. Sales also fluctuate seasonally and differ substantially across stores. Without accounting for these patterns, we might incorrectly attribute seasonal sales changes to temperature.
+
+For example, both temperature and sales vary systematically across seasons, so higher sales during colder holiday months could misleadingly suggest a negative relationship between temperature and sales even if temperature itself has no causal effect.
+
+A causal diagram would suggest that temperature may affect sales through changes in consumer behavior, such as shopping frequency or product mix. However, temperature is also correlated with time-varying factors like seasonality, macroeconomic conditions, and holidays, which independently affect sales. The regression strategy is designed to block these backdoor paths by controlling for economic variables and fixed seasonal and store-level factors.
+
+Specifically, store fixed effects absorb time-invariant differences across stores (such as location and demographics), while month-by-year fixed effects control for seasonality and macroeconomic shocks that simultaneously influence temperature and sales.
+
+
+## **2. Exploratory Graphs (Guiding the Model)**
+
+### **2.1 Temperature Over Time**
+
+This graph helps assess seasonality and time trends in temperature, which indicates whether time controls are needed in the regression analysis.
+
+```{r}
+ggplot(data, aes(x = Date, y = Temperature)) +
+  geom_line(alpha = 0.25) +
+  labs(
+    title = "Temperature Over Time",
+    x = "Date",
+    y = "Temperature (F)"
+  )
+```
+
+
+### **2.2 Weekly Sales vs Temperature**
+
+This graph helps assess whether the relationship between temperature and sales appears linear and whether the variance of sales changes with temperature, which would motivate robust standard errors or nonlinear terms.
+
+
+```{r message=FALSE}
+ggplot(data, aes(x = Temperature, y = Weekly_Sales)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(se = FALSE) +
+  labs(
+    title = "Weekly Sales vs Temperature",
+    x = "Temperature (F)",
+    y = "Weekly Sales"
+  )
+```
+
+The relationship appears broadly increasing, but to verify whether the effect changes at higher temperatures, a nonlinear specification is tested in Model 4.
+
+
+## **3. Regression Analysis**
+
+The coefficient on Temperature represents the expected within-store change in weekly sales (in dollars) associated with a 1°F increase in temperature, holding constant observed economic conditions as well as store and seasonal fixed effects.
+
+Temperature varies systematically by season and over time, while sales also exhibit strong seasonal patterns and persistent differences across stores. Without controlling for these factors, any observed relationship between temperature and sales may reflect confounding rather than a causal effect. For this reason, the analysis progresses from a naive specification to models that control for economic conditions and, ultimately, store and time fixed effects.
+
+Standard errors are clustered at the store level to account for within-store correlation over time. Because the outcome is measured weekly and consumer shopping decisions are likely influenced by current weather conditions, temperature in the same week is the most plausible channel through which weather affects sales in the short term.
+
+Weekly sales are measured in dollar levels rather than logs because the primary interest is in the absolute dollar impact of a one-degree change in temperature, which is more directly interpretable for business decision-making.
+
+### **Model 1: Naive Association**
+
+```{r}
+m1 <- feols(Weekly_Sales ~ Temperature, data = data, vcov = ~Store
+)
+etable(m1)
+```
+
+### **Model 2: Adding Observed Time-Varying Controls**
+
+```{r}
+m2 <- feols(
+  Weekly_Sales ~ Temperature + Fuel_Price + CPI + Unemployment + Holiday_Flag,
+  data = data,
+  vcov = ~Store
+)
+etable(m1, m2)
+```
+
+
+To flexibly control for seasonality and common time shocks, year and month variables are constructed from the date and combined into month-by-year fixed effects.
+
+
+### **Model 3: Preferred Causal Specification**
+
+This model includes store fixed effects and month-by-year fixed effects. It compares each store to itself over time and absorbs seasonal and broad time patterns.
+
+
+```{r}
+m3 <- feols(
+  Weekly_Sales ~ Temperature + Fuel_Price + CPI + Unemployment + Holiday_Flag |
+    Store + year^month,
+  data = data,
+  vcov = ~Store
+)
+etable(m1, m2, m3)
+```
+### Model 4: Nonlinear Temperature Check
+```{r}
+m4 <- feols(
+  Weekly_Sales ~ Temperature + I(Temperature^2) +
+    Fuel_Price + CPI + Unemployment + Holiday_Flag |
+    Store + year^month,
+  data = data,
+  vcov = ~Store
+)
+
+etable(m1, m2, m3, m4)
+```
+
+
+## **4. Interpretation and Conclusion**
+
+Model 3 includes store fixed effects and month-by-year fixed effects, meaning each store is effectively compared to itself over time while accounting for seasonal patterns and broader time shocks. Standard errors are clustered at the store level to allow for correlation in sales within the same store across weeks. In this specification, the temperature coefficient captures how unusually warmer or cooler weeks influence sales within the same store and month-year, holding constant economic conditions and holiday effects.
+
+Model 4 introduces a quadratic term in temperature, which is statistically significant and negative. This indicates that the positive marginal effect of temperature on sales is strongest at moderate temperatures and diminishes at higher temperatures, implying diminishing marginal effects as temperatures rise. Although the overall effect remains statistically significant, its magnitude is small relative to average weekly sales, which exceed $1 million per store. This suggests that temperature may slightly influence short-term consumer behavior, but it is not a primary driver of overall sales variation.
+
+
+Overall, after accounting for store characteristics, seasonal trends, economic conditions, and holidays, the evidence supports a modest but credible causal relationship between temperature and weekly Walmart sales. While temperature has a statistically detectable effect, its economic magnitude is small relative to overall sales levels, suggesting that rising temperatures alone are unlikely to pose a major short-term risk to Walmart’s revenue.
+
